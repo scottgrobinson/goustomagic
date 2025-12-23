@@ -1,8 +1,19 @@
-import requests
 import os
 import json
 import logging
 from typing import List, Tuple, Dict, Optional
+
+import requests
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def get_required_env(var_name: str) -> str:
+    value = os.getenv(var_name)
+    if not value:
+        raise RuntimeError(f"Environment variable {var_name} is required")
+    return value
 
 
 def download_image(url: str, folder: str, session: Optional[requests.Session] = None) -> None:
@@ -30,8 +41,8 @@ class GoustoRecipeSync:
 
     def __init__(
         self,
-        output_dir: str = "recipes",
-        images_dir: str = "images",
+        output_dir: str,
+        images_dir: str,
         batch_size: int = 16,
         log_level: int = logging.INFO
     ) -> None:
@@ -190,10 +201,13 @@ class GoustoRecipeSync:
 
 
 if __name__ == "__main__":
+    output_dir = get_required_env("GOUSTO_OUTPUT_DIR")
+    images_dir = get_required_env("GOUSTO_IMAGES_DIR")
+
     syncer = GoustoRecipeSync(
-        output_dir="data/recipes",
-        images_dir="data/images",
-        batch_size= 16,
+        output_dir=output_dir,
+        images_dir=images_dir,
+        batch_size=16,
         log_level=logging.DEBUG
     )
     syncer.sync()
