@@ -1,3 +1,5 @@
+"""Download Gousto recipe JSON and images to local folders, skipping unchanged files."""
+
 import os
 import json
 import logging
@@ -10,6 +12,7 @@ load_dotenv()
 
 
 def get_required_env(var_name: str) -> str:
+    """Return required environment variable or raise if missing."""
     value = os.getenv(var_name)
     if not value:
         raise RuntimeError(f"Environment variable {var_name} is required")
@@ -36,6 +39,7 @@ def download_image(url: str, folder: str, session: Optional[requests.Session] = 
 
 
 class GoustoRecipeSync:
+    """Fetch Gousto recipes, persist JSON, and download associated images."""
     BASE_LIST_URL = "https://production-api.gousto.co.uk/cmsreadbroker/v1/recipes"
     BASE_DETAIL_URL = "https://production-api.gousto.co.uk/cmsreadbroker/v1/recipe/"
 
