@@ -663,6 +663,43 @@ def build_recipe_ingredients(
 def _clean_food_name(raw_name: str | None, label: str | None) -> str | None:
     """Strip quantity/packaging tokens from a label to get a reusable food name."""
     text = (label or raw_name or "").strip()
+    packaging_prefix: str | None = None
+    protein_pattern = r"\b(fillet|fillets|breast|thigh|steak|loin)\b"
+    fish_keywords = ("salmon", "haddock", "cod", "trout", "seabass", "sea bass", "bass", "hake", "tuna", "prawn", "prawns", "shrimp")
+    meat_keywords = ("chicken", "turkey", "duck", "beef", "pork", "lamb", "meatball", "sausage")
+    # Capture pack-style prefixes so we can reattach them after cleaning the base name.
+    count_weight_match = re.search(r"(?P<count>\d+(?:\.\d+)?)\s*[x×]\s*(?P<weight>\d+(?:\.\d+)?\s*(?:g|kg|ml|l|cl))", text, flags=re.IGNORECASE)
+    if count_weight_match:
+        count = count_weight_match.group("count").rstrip()
+        weight = count_weight_match.group("weight").strip()
+        # Drop the multiplier for certain proteins (e.g., salmon) where we prefer just the pack weight.
+        remainder = text.replace(count_weight_match.group(0), "", 1).strip()
+        base_lower = remainder.lower()
+        if any(k in base_lower for k in fish_keywords) and re.search(protein_pattern, remainder, flags=re.IGNORECASE):
+            # For fish fillets/loins, keep just the pack weight.
+            packaging_prefix = weight
+        elif any(k in base_lower for k in meat_keywords) or re.search(protein_pattern, remainder, flags=re.IGNORECASE):
+            # For meat/poultry fillets or generic fillet patterns, keep count x weight.
+            packaging_prefix = f"{count} x {weight}"
+        text = remainder
+    else:
+        weight_only_match = re.match(r"(?P<weight>\d+(?:\.\d+)?\s*(?:g|kg|ml|l|cl))\b", text, flags=re.IGNORECASE)
+        if weight_only_match:
+            remaining = text[len(weight_only_match.group(0)) :].strip()
+            # Keep single weight prefixes for proteins where pack size matters.
+            base_lower = remaining.lower()
+            if any(k in base_lower for k in fish_keywords) and re.search(protein_pattern, remaining, flags=re.IGNORECASE):
+                packaging_prefix = weight_only_match.group("weight").strip()
+            text = text[len(weight_only_match.group(0)) :].strip()
+    size_parenthetical = None
+    size_match = re.search(
+        r"\(\s*\d+(?:\.\d+)?\s*(?:g|kg|ml|l|cl|oz|lb|lbs|litre|liter)\s*\)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    has_tin_or_can = bool(re.search(r"\b(tin|tins|can|cans)\b", text, flags=re.IGNORECASE))
+    if size_match:
+        size_parenthetical = size_match.group(0).strip()
     if not text:
         return None
     # Remove leading patterns like "2 x 110g".
@@ -681,8 +718,29 @@ def _clean_food_name(raw_name: str | None, label: str | None) -> str | None:
     ).strip()
     # Remove trailing multipliers like "x2".
     text = re.sub(r"\s*[x×]\s*\d+(?:\.\d+)?\s*$", "", text, flags=re.IGNORECASE).strip()
-    # Remove bracketed quantities anywhere (e.g., "(200g)"), then clean trailing spaces.
-    text = re.sub(r"\([^\)]*\)", "", text).strip()
+    # Remove bracketed packaging/quantity info (e.g., "(200g)") but keep descriptive qualifiers such as "(ready to eat)".
+    def _strip_packaging_parenthetical(match: re.Match[str]) -> str:
+        content = match.group(1).strip().lower()
+        if not content:
+            return ""
+        # Strip when the parenthetical starts with a number, measurement, or pack-style text.
+        if re.match(
+            r"^\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?\s*(?:g|kg|ml|l|cl|tsp|tbsp|cup|cups|oz|lb|lbs|litre|liter|cm|mm|inch|inches)\b",
+            content,
+        ):
+            return ""
+        if re.match(r"^\d+(?:\.\d+)?\s*[x×]\s*\d+", content):
+            return ""
+        if re.match(
+            r"^\d+(?:\.\d+)?\s*(?:pack|packs|packet|packets|bag|bags|pot|pots|tub|tubs|pouch|pouches|tray|trays|tin|tins|can|cans|pc|pcs|piece|pieces)\b",
+            content,
+        ):
+            return ""
+        if re.match(r"^\d+(?:\.\d+)?\s*$", content):
+            return ""
+        return match.group(0)
+
+    text = re.sub(r"\(([^)]*)\)", _strip_packaging_parenthetical, text).strip()
     # Drop packaging words at the end to keep the core ingredient name.
     text = re.sub(
         r"\b(sachet|sachets|packet|packets|pack|packs|bag|bags|pot|pots|tub|tubs|pouch|pouches|tray|trays)\b\.?$",
@@ -690,7 +748,22 @@ def _clean_food_name(raw_name: str | None, label: str | None) -> str | None:
         text,
         flags=re.IGNORECASE,
     ).strip()
+    # Strip any remaining leading quantity/unit tokens (handle repeated numbers like \"1 1 orange\").
+    while True:
+        new_text = re.sub(
+            r"^(?:\d+(?:\.\d+)?(?:\s*/\s*\d+(?:\.\d+)?)?(?:\s*(?:g|kg|ml|l|cl|tsp|tbsp|cup|cups|oz|lb|lbs|litre|liter|cm|mm|inch|inches)(?![a-zA-Z]))?(?:\s*[x×]\s*)?)",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        ).strip()
+        if new_text == text:
+            break
+        text = new_text
     text = re.sub(r"\s+", " ", text)
+    if has_tin_or_can and size_parenthetical and size_parenthetical.lower() not in text.lower():
+        text = f"{text} {size_parenthetical}".strip()
+    if packaging_prefix:
+        text = f"{packaging_prefix} {text}".strip()
     if text:
         return text[0].upper() + text[1:]
     if raw_name:
@@ -761,6 +834,8 @@ def parse_quantity_and_unit(label: str, warn_prefix: str | None = None) -> tuple
         "packets": "pack",
         "tin": "tin",
         "tins": "tin",
+        "can": "can",
+        "cans": "can",
         "cm": "centimeter",
         "slice": "slice",
         "slices": "slice",
@@ -774,6 +849,7 @@ def parse_quantity_and_unit(label: str, warn_prefix: str | None = None) -> tuple
     unit_token = None
     lock_quantity = False  # When True, skip fallback parsing that would override count-based qty.
     count_multiplier: float | None = None
+    multiplier_applied = False
 
     # Handle patterns like "2 x 110g salmon fillets" up front.
     multi_match = re.search(
@@ -786,7 +862,7 @@ def parse_quantity_and_unit(label: str, warn_prefix: str | None = None) -> tuple
             count = float(multi_match.group("count"))
             # We treat this as "count" items, leaving the per-item weight in the label for readability.
             qty = count
-            unit_token = None
+            unit_token = multi_match.group("unit") if "salmon" in label.lower() else None
             lock_quantity = True
         except ValueError:
             qty = None
@@ -848,6 +924,7 @@ def parse_quantity_and_unit(label: str, warn_prefix: str | None = None) -> tuple
             unit_token = match.group("unit")
             if count_multiplier is not None and qty is not None and count_multiplier != 1:
                 qty *= count_multiplier
+                multiplier_applied = True
     # Fallback: search anywhere in the label for a number+unit combo.
     if not lock_quantity and (qty is None or unit_token is None):
         match = re.search(r"(?P<num>\d+(?:\.\d+)?)\s*(?P<unit>[a-zA-Z]+)", label)
@@ -857,6 +934,14 @@ def parse_quantity_and_unit(label: str, warn_prefix: str | None = None) -> tuple
             except ValueError:
                 qty = None
             unit_token = match.group("unit")
+    if (
+        not lock_quantity
+        and count_multiplier is not None
+        and qty is not None
+        and not multiplier_applied
+        and qty != count_multiplier
+    ):
+        qty *= count_multiplier
 
     resolved_unit: dict[str, Any] | None = None
     if unit_token:
