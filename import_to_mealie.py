@@ -394,9 +394,11 @@ def gather_category_titles(entry: dict[str, Any]) -> list[str]:
         title = cat.get("title")
         if title:
             titles.append(title)
-    cuisine_title = entry.get("cuisine", {}).get("title")
-    if cuisine_title:
-        titles.append(cuisine_title)
+    cuisine = entry.get("cuisine")
+    if isinstance(cuisine, dict):
+        cuisine_title = cuisine.get("title")
+        if cuisine_title:
+            titles.append(cuisine_title)
 
     unique_titles: list[str] = []
     seen_category_keys: set[str] = set()
