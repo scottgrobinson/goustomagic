@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-import mimetypes
+import argparse
+import concurrent.futures
 import json
+import mimetypes
 import os
 import re
+import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import requests
@@ -51,8 +54,18 @@ UNITS_BY_KEY: dict[str, Unit] = {}
 TAGS_BY_KEY: dict[str, Tag] = {}
 warnings: list[str] = []
 errors: list[str] = []
+INGREDIENT_MAP: dict[str, str] = {}
+INGREDIENT_MAP_BY_KEY: dict[str, str] = {}
+CACHE_LOCK = threading.RLock()
+WARNINGS_LOCK = threading.Lock()
 
 load_dotenv()
+
+
+def append_warning(message: str) -> None:
+    """Append a warning in a threadsafe way."""
+    with WARNINGS_LOCK:
+        warnings.append(message)
 
 
 def get_required_env(var_name: str) -> str:
@@ -152,6 +165,44 @@ def _tag_key(name: str | None) -> str | None:
     return _category_key(name)
 
 
+def load_ingredient_map(map_path: Path) -> None:
+    """Load ingredient name mappings from a JSON file."""
+    INGREDIENT_MAP.clear()
+    INGREDIENT_MAP_BY_KEY.clear()
+    if not map_path.exists():
+        append_warning(f"Ingredient map not found: {map_path}")
+        return
+    try:
+        with map_path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:
+        raise RuntimeError(f"Ingredient map failed to load ({map_path}): {exc}") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError(f"Ingredient map {map_path} is not a JSON object")
+    for raw_key, raw_value in data.items():
+        key_text = str(raw_key).strip() if raw_key is not None else ""
+        value_text = str(raw_value).strip() if raw_value is not None else ""
+        if not key_text or not value_text:
+            continue
+        INGREDIENT_MAP[key_text] = value_text
+        normalized_key = _food_key(key_text)
+        if normalized_key:
+            INGREDIENT_MAP_BY_KEY.setdefault(normalized_key, value_text)
+
+
+def map_ingredient_name(name: str | None) -> str | None:
+    """Return the mapped ingredient name if present."""
+    if not name:
+        return None
+    mapped = INGREDIENT_MAP.get(name)
+    if mapped:
+        return mapped
+    key = _food_key(name)
+    if key and key in INGREDIENT_MAP_BY_KEY:
+        return INGREDIENT_MAP_BY_KEY[key]
+    return name
+
+
 def _normalize_category_list(payload: Any) -> list[dict[str, Any]]:
     """Coerce Mealie category responses into a list of category dicts."""
     if isinstance(payload, list):
@@ -181,7 +232,7 @@ def _normalize_tag_list(payload: Any) -> list[dict[str, Any]]:
 
 def load_existing_categories(session: requests.Session, base_url: str) -> None:
     """Preload category cache from Mealie so we can re-use existing records."""
-    CATEGORIES_BY_KEY.clear()
+    categories_by_key: dict[str, Category] = {}
     seen_ids: set[str] = set()
     url = f"{base_url}/organizers/categories"
     page = 1
@@ -203,16 +254,19 @@ def load_existing_categories(session: requests.Session, base_url: str) -> None:
                 seen_ids.add(cat_id)
             for key in (_category_key(_category_name(cat)), _category_key(cat.get("slug"))):
                 if key:
-                    CATEGORIES_BY_KEY[key] = cat  # cache by name/slug for quick lookups
+                    categories_by_key[key] = cat  # cache by name/slug for quick lookups
 
         if len(categories) < per_page:
             break
         page += 1
+    with CACHE_LOCK:
+        CATEGORIES_BY_KEY.clear()
+        CATEGORIES_BY_KEY.update(categories_by_key)
 
 
 def load_existing_foods(session: requests.Session, base_url: str) -> None:
     """Preload food cache from Mealie so we can re-use existing ingredient records."""
-    FOODS_BY_KEY.clear()
+    foods_by_key: dict[str, Food] = {}
     seen_ids: set[str] = set()
     url = f"{base_url}/foods"
     page = 1
@@ -234,15 +288,18 @@ def load_existing_foods(session: requests.Session, base_url: str) -> None:
                 seen_ids.add(food_id)
             for key in (_food_key(food.get("name")), _food_key(food.get("slug"))):
                 if key:
-                    FOODS_BY_KEY[key] = food  # cache by name/slug
+                    foods_by_key[key] = food  # cache by name/slug
 
         if len(foods) < per_page:
             break
         page += 1
+    with CACHE_LOCK:
+        FOODS_BY_KEY.clear()
+        FOODS_BY_KEY.update(foods_by_key)
 
 def load_existing_units(session: requests.Session, base_url: str) -> None:
     """Preload unit cache from Mealie for unit lookups."""
-    UNITS_BY_KEY.clear()
+    units_by_key: dict[str, Unit] = {}
     seen_ids: set[str] = set()
     url = f"{base_url}/units"
     page = 1
@@ -269,16 +326,19 @@ def load_existing_units(session: requests.Session, base_url: str) -> None:
                 _unit_key(unit.get("pluralAbbreviation")),
             ):
                 if key:
-                    UNITS_BY_KEY[key] = unit
+                    units_by_key[key] = unit
 
         if len(units) < per_page:
             break
         page += 1
+    with CACHE_LOCK:
+        UNITS_BY_KEY.clear()
+        UNITS_BY_KEY.update(units_by_key)
 
 
 def load_existing_tags(session: requests.Session, base_url: str) -> None:
     """Preload tag cache from Mealie so we can re-use existing tags."""
-    TAGS_BY_KEY.clear()
+    tags_by_key: dict[str, Tag] = {}
     seen_ids: set[str] = set()
     url = f"{base_url}/organizers/tags"
     page = 1
@@ -300,18 +360,23 @@ def load_existing_tags(session: requests.Session, base_url: str) -> None:
                 seen_ids.add(tag_id)
             for key in (_tag_key(tag.get("name")), _tag_key(tag.get("slug"))):
                 if key:
-                    TAGS_BY_KEY[key] = tag
+                    tags_by_key[key] = tag
 
         if len(tags) < per_page:
             break
         page += 1
+    with CACHE_LOCK:
+        TAGS_BY_KEY.clear()
+        TAGS_BY_KEY.update(tags_by_key)
 
 
 def ensure_food(session: requests.Session, base_url: str, name: str, description: str | None = None) -> dict[str, Any]:
     """Return a food object, creating it in Mealie if needed."""
     name_key = _food_key(name)
-    if name_key and name_key in FOODS_BY_KEY:
-        return FOODS_BY_KEY[name_key]
+    with CACHE_LOCK:
+        cached = FOODS_BY_KEY.get(name_key) if name_key else None
+    if cached:
+        return cached
 
     url = f"{base_url}/foods"
     payload: dict[str, Any] = {"name": name, "pluralName": name}
@@ -320,14 +385,17 @@ def ensure_food(session: requests.Session, base_url: str, name: str, description
         # If creation fails because it already exists, refresh the cache and retry lookup.
         if resp.status_code in (400, 409):
             load_existing_foods(session, base_url)
-            if name_key and name_key in FOODS_BY_KEY:
-                return FOODS_BY_KEY[name_key]
+            with CACHE_LOCK:
+                cached = FOODS_BY_KEY.get(name_key) if name_key else None
+            if cached:
+                return cached
         raise RuntimeError(f"food '{name}': failed to create ({resp.status_code}): {resp.text}")
 
     food = resp.json()
-    for key in (_food_key(food.get("name")), _food_key(food.get("slug"))):
-        if key:
-            FOODS_BY_KEY[key] = food
+    with CACHE_LOCK:
+        for key in (_food_key(food.get("name")), _food_key(food.get("slug"))):
+            if key:
+                FOODS_BY_KEY[key] = food
     return food
 
 
@@ -336,9 +404,11 @@ def ensure_category(session: requests.Session, base_url: str, title: str) -> dic
     name_key = _category_key(title)
     slug_value = slugify(title)
     slug_key = _category_key(slug_value)
-    for key in (name_key, slug_key):
-        if key and key in CATEGORIES_BY_KEY:
-            return CATEGORIES_BY_KEY[key]
+    with CACHE_LOCK:
+        for key in (name_key, slug_key):
+            cached = CATEGORIES_BY_KEY.get(key) if key else None
+            if cached:
+                return cached
 
     url = f"{base_url}/organizers/categories"
     payload = {"name": title, "slug": slug_value}
@@ -347,16 +417,19 @@ def ensure_category(session: requests.Session, base_url: str, title: str) -> dic
         # If creation fails because it already exists, refresh the cache and retry lookup.
         if resp.status_code in (400, 409):
             load_existing_categories(session, base_url)
-            for key in (name_key, slug_key):
-                if key and key in CATEGORIES_BY_KEY:
-                    return CATEGORIES_BY_KEY[key]
+            with CACHE_LOCK:
+                for key in (name_key, slug_key):
+                    cached = CATEGORIES_BY_KEY.get(key) if key else None
+                    if cached:
+                        return cached
         raise RuntimeError(f"category '{title}': failed to create ({resp.status_code}): {resp.text}")
 
     category = resp.json()
     name = _category_name(category) or title
-    for key in (_category_key(name), _category_key(category.get("slug"))):
-        if key:
-            CATEGORIES_BY_KEY[key] = category
+    with CACHE_LOCK:
+        for key in (_category_key(name), _category_key(category.get("slug"))):
+            if key:
+                CATEGORIES_BY_KEY[key] = category
     return category
 
 
@@ -365,9 +438,11 @@ def ensure_tag(session: requests.Session, base_url: str, name: str) -> dict[str,
     name_key = _tag_key(name)
     slug_value = slugify(name)
     slug_key = _tag_key(slug_value)
-    for key in (name_key, slug_key):
-        if key and key in TAGS_BY_KEY:
-            return TAGS_BY_KEY[key]
+    with CACHE_LOCK:
+        for key in (name_key, slug_key):
+            cached = TAGS_BY_KEY.get(key) if key else None
+            if cached:
+                return cached
 
     url = f"{base_url}/organizers/tags"
     payload = {"name": name, "slug": slug_value}
@@ -375,15 +450,18 @@ def ensure_tag(session: requests.Session, base_url: str, name: str) -> dict[str,
     if resp.status_code not in (200, 201):
         if resp.status_code in (400, 409):
             load_existing_tags(session, base_url)
-            for key in (name_key, slug_key):
-                if key and key in TAGS_BY_KEY:
-                    return TAGS_BY_KEY[key]
+            with CACHE_LOCK:
+                for key in (name_key, slug_key):
+                    cached = TAGS_BY_KEY.get(key) if key else None
+                    if cached:
+                        return cached
         raise RuntimeError(f"tag '{name}': failed to create ({resp.status_code}): {resp.text}")
 
     tag = resp.json()
-    for key in (_tag_key(tag.get("name")), _tag_key(tag.get("slug"))):
-        if key:
-            TAGS_BY_KEY[key] = tag
+    with CACHE_LOCK:
+        for key in (_tag_key(tag.get("name")), _tag_key(tag.get("slug"))):
+            if key:
+                TAGS_BY_KEY[key] = tag
     return tag
 
 
@@ -423,7 +501,7 @@ def ingredient_label_and_name(item: dict[str, Any]) -> tuple[str, str | None]:
     """Return (label, cleaned food name) for an ingredient/basics entry."""
     raw_name = item.get("name") or item.get("title") or item.get("label")
     label = item.get("label") or raw_name or ""
-    name = _clean_food_name(raw_name, label)
+    name = map_ingredient_name(_clean_food_name(raw_name, label))
     return label, name
 
 
@@ -589,7 +667,7 @@ def build_recipe_ingredients(
             matched_item = code_to_item.get(code) or code_to_item.get(sku_id)
             if not matched_item:
                 msg = f"Portion SKU code '{code}' not matched to ingredient; skipping."
-                warnings.append(f"{warn_prefix}: {msg}" if warn_prefix else msg)
+                append_warning(f"{warn_prefix}: {msg}" if warn_prefix else msg)
                 continue
             ordered_items.append((matched_item, sku))
     else:
@@ -950,19 +1028,20 @@ def parse_quantity_and_unit(label: str, warn_prefix: str | None = None) -> tuple
         alias = unit_aliases.get(unit_token.lower())
         if alias:
             key = _unit_key(alias)
-            if key and key in UNITS_BY_KEY:
-                resolved_unit = UNITS_BY_KEY[key]
-            else:
-                alt_key = _unit_key(unit_token)
-                if alt_key and alt_key in UNITS_BY_KEY:
-                    resolved_unit = UNITS_BY_KEY[alt_key]
+            with CACHE_LOCK:
+                if key:
+                    resolved_unit = UNITS_BY_KEY.get(key)
+                if not resolved_unit:
+                    alt_key = _unit_key(unit_token)
+                    if alt_key:
+                        resolved_unit = UNITS_BY_KEY.get(alt_key)
         # If unit token isn't in our alias map at all, treat as no-unit (e.g., "1 lemon").
         else:
             unit_token = None
 
         if unit_token and (resolved_unit is None or not resolved_unit.get("id")):
             msg = f"Unit not found for '{label}' (token='{unit_token}'); omitting unit."
-            warnings.append(f"{warn_prefix}: {msg}" if warn_prefix else msg)
+            append_warning(f"{warn_prefix}: {msg}" if warn_prefix else msg)
             resolved_unit = None
 
     return qty, resolved_unit
@@ -1120,8 +1199,218 @@ def upload_recipe_asset(
     return stored_name
 
 
+def process_recipe_file(
+    session: requests.Session,
+    base_url: str,
+    images_dir: Path,
+    path: Path,
+) -> str | None:
+    """Process a single recipe file; return an error message when it fails."""
+    stage = "read recipe file"
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as exc:
+        return f"{path.name}: failed to read ({exc})"
+
+    entry = extract_entry(data)
+    recipe_name = entry.get("title")
+    slug = slugify(recipe_name) if recipe_name else None
+    if not slug:
+        return f"{path.name}: canonical slug missing"
+
+    ordered_steps = sorted(entry.get("cooking_instructions") or [], key=lambda s: s.get("order") or 0)
+    instruction_assets = collect_instruction_assets(ordered_steps)
+    category_titles = gather_category_titles(entry)
+    ingredients = gather_ingredients(entry)
+    portion_skus = select_portion_skus(entry, portions=2)
+    allergen_tag_names = gather_allergen_tags(entry)
+
+    try:
+        stage = "resolve categories"
+        recipe_categories = (
+            [ensure_category(session, base_url, title) for title in category_titles]
+            if category_titles
+            else None
+        )
+        stage = "resolve ingredients"
+        has_ingredients = bool(ingredients) or bool(portion_skus)
+        recipe_ingredients = (
+            build_recipe_ingredients(
+                session,
+                base_url,
+                entry,
+                portion_skus,
+                warn_prefix=path.name,
+            )
+            if has_ingredients
+            else None
+        )
+        stage = "resolve tags"
+        recipe_tags = (
+            [ensure_tag(session, base_url, name) for name in allergen_tag_names]
+            if allergen_tag_names
+            else None
+        )
+
+        stage = "fetch recipe"
+        recipe = fetch_recipe(session, base_url, slug)
+        created_new = False
+        if not recipe:
+            stage = "create recipe"
+            create_recipe(session, base_url, slug)
+            stage = "fetch created recipe"
+            recipe = fetch_recipe(session, base_url, slug)
+            created_new = True
+
+        if not recipe:
+            return f"{path.name}: {slug}: failed to fetch recipe after creation"
+
+        recipe_id = recipe.get("id")
+
+        step_asset_map: dict[int, str] = {asset_idx: stored for asset_idx, stored, _src in instruction_assets}
+        recipe_instructions = build_instructions(ordered_steps, recipe_id, step_asset_map)
+
+        stage = "update recipe"
+        update_recipe(
+            session,
+            base_url,
+            slug,
+            recipe,
+            entry,
+            recipe_categories,
+            recipe_instructions,
+            recipe_ingredients,
+            recipe_tags,
+        )
+
+        image_selection = select_image(entry)
+        should_upload_image = created_new or not recipe.get("image")
+        if image_selection and should_upload_image:
+            image_filename, _image_url = image_selection
+            stage = "upload recipe image"
+            upload_recipe_image(session, base_url, slug, images_dir, image_filename)
+
+        if recipe_id and instruction_assets:
+            stage = "sync instruction assets"
+            for asset_idx, stored_filename, source_filename in instruction_assets:
+                if asset_exists(session, base_url, recipe_id, stored_filename):
+                    continue
+                upload_recipe_asset(session, base_url, slug, images_dir, stored_filename, source_filename)
+                asset_exists(session, base_url, recipe_id, stored_filename)
+    except Exception as exc:
+        return f"{path.name}: {slug}: {stage}: {exc}"
+
+    return None
+
+
+def process_recipe_files(
+    paths: list[Path],
+    session: requests.Session,
+    base_url: str,
+    images_dir: Path,
+    label: str | None = None,
+    max_workers: int = 1,
+    session_factory: Callable[[], requests.Session] | None = None,
+) -> tuple[list[Path], list[str]]:
+    """Process recipe files and return (failed_paths, errors)."""
+    errors_local: list[str] = []
+    failed: list[Path] = []
+    total = len(paths)
+    if max_workers <= 1 or total <= 1:
+        for idx, path in enumerate(paths, start=1):
+            if label:
+                print(f"[{label} {idx}/{total}] {path.name}")
+            else:
+                print(f"[{idx}/{total}] {path.name}")
+            err = process_recipe_file(session, base_url, images_dir, path)
+            if err:
+                errors_local.append(err)
+                failed.append(path)
+        return failed, errors_local
+
+    if session_factory is None:
+        raise ValueError("session_factory is required when max_workers > 1")
+
+    thread_local = threading.local()
+
+    def get_session() -> requests.Session:
+        sess = getattr(thread_local, "session", None)
+        if sess is None:
+            sess = session_factory()
+            thread_local.session = sess
+        return sess
+
+    def worker(index: int, recipe_path: Path) -> tuple[int, Path, str | None]:
+        sess = get_session()
+        err = process_recipe_file(sess, base_url, images_dir, recipe_path)
+        return index, recipe_path, err
+
+    results: list[tuple[int, Path, str | None]] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures: list[concurrent.futures.Future[tuple[int, Path, str | None]]] = []
+        for idx, path in enumerate(paths, start=1):
+            futures.append(executor.submit(worker, idx, path))
+        completed = 0
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            completed += 1
+            _, path, _err = result
+            if label:
+                print(f"[{label} {completed}/{total}] {path.name}")
+            else:
+                print(f"[{completed}/{total}] {path.name}")
+            results.append(result)
+
+    for _, path, err in sorted(results, key=lambda item: item[0]):
+        if err:
+            errors_local.append(err)
+            failed.append(path)
+    return failed, errors_local
+
+
+def build_session(mealie_token: str) -> requests.Session:
+    """Create a requests session with Mealie auth headers."""
+    session = requests.Session()
+    session.headers.update({"Authorization": f"Bearer {mealie_token}"})
+    return session
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments."""
+    parser = argparse.ArgumentParser(description="Import Gousto recipe JSON files into Mealie.")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of concurrent workers (default: 1 or GOUSTO_WORKERS).",
+    )
+    return parser.parse_args()
+
+
+def resolve_workers(arg_value: int | None) -> int:
+    """Resolve worker count from CLI args or environment variable."""
+    if arg_value is not None:
+        workers = arg_value
+    else:
+        env_value = os.getenv("GOUSTO_WORKERS")
+        if not env_value:
+            workers = 1
+        else:
+            try:
+                workers = int(env_value)
+            except ValueError as exc:
+                raise RuntimeError(f"GOUSTO_WORKERS must be an integer (got {env_value!r})") from exc
+    if workers < 1:
+        raise RuntimeError("workers must be >= 1")
+    return workers
+
+
 def main() -> None:
     """Drive import of Gousto recipe JSON files into Mealie."""
+    args = parse_args()
+    workers = resolve_workers(args.workers)
+
     output_dir = Path(get_required_env("GOUSTO_OUTPUT_DIR"))
     if not output_dir.exists():
         raise RuntimeError(f"GOUSTO_OUTPUT_DIR does not exist: {output_dir}")
@@ -1132,8 +1421,11 @@ def main() -> None:
     mealie_base_url = get_required_env("MEALIE_BASE_URL").rstrip("/")
     mealie_token = get_required_env("MEALIE_TOKEN")
 
-    session = requests.Session()
-    session.headers.update({"Authorization": f"Bearer {mealie_token}"})
+    session = build_session(mealie_token)
+
+    load_ingredient_map(Path(__file__).with_name("ingredient_map.json"))
+    if INGREDIENT_MAP:
+        print(f"Loaded {len(INGREDIENT_MAP)} ingredient name mappings.")
 
     print("Loading existing categories...")
     load_existing_categories(session, mealie_base_url)
@@ -1153,110 +1445,33 @@ def main() -> None:
 
     recipe_files = sorted(p for p in output_dir.glob("*.json") if not p.name.startswith("._"))
     total = len(recipe_files)
-    print(f"Processing {total} recipe file(s)...")
+    if workers > 1:
+        print(f"Processing {total} recipe file(s) with {workers} workers...")
+    else:
+        print(f"Processing {total} recipe file(s)...")
 
-    for idx, path in enumerate(recipe_files, start=1):
-        stage = "read recipe file"
-        print(f"[{idx}/{total}] {path.name}")
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception as exc:
-            errors.append(f"{path.name}: failed to read ({exc})")
-            continue
-        entry = extract_entry(data)
-        recipe_name = entry.get("title")
-        slug = slugify(recipe_name) if recipe_name else None
-        if not slug:
-            errors.append(f"{path.name}: canonical slug missing")
-            continue
-
-        ordered_steps = sorted(entry.get("cooking_instructions") or [], key=lambda s: s.get("order") or 0)
-        instruction_assets = collect_instruction_assets(ordered_steps)
-
-        category_titles = gather_category_titles(entry)
-        ingredients = gather_ingredients(entry)
-        portion_skus = select_portion_skus(entry, portions=2)
-        allergen_tag_names = gather_allergen_tags(entry)
-
-        # Track a human-readable stage so failures are easier to trace.
-        stage = "resolve categories"
-        try:
-            recipe_categories = (
-                [ensure_category(session, mealie_base_url, title) for title in category_titles]
-                if category_titles
-                else None
-            )
-            stage = "resolve ingredients"
-            has_ingredients = bool(ingredients) or bool(portion_skus)
-            recipe_ingredients = (
-                build_recipe_ingredients(
-                    session,
-                    mealie_base_url,
-                    entry,
-                    portion_skus,
-                    warn_prefix=path.name,
-                )
-                if has_ingredients
-                else None
-            )
-            stage = "resolve tags"
-            recipe_tags = (
-                [ensure_tag(session, mealie_base_url, name) for name in allergen_tag_names]
-                if allergen_tag_names
-                else None
-            )
-
-            stage = "fetch recipe"
-            recipe = fetch_recipe(session, mealie_base_url, slug)
-            created_new = False
-            if not recipe:
-                stage = "create recipe"
-                create_recipe(session, mealie_base_url, slug)
-                stage = "fetch created recipe"
-                recipe = fetch_recipe(session, mealie_base_url, slug)
-                created_new = True
-
-            if not recipe:
-                errors.append(f"{path.name}: {slug}: failed to fetch recipe after creation")
-                continue
-
-            recipe_id = recipe.get("id")
-
-            step_asset_map: dict[int, str] = {asset_idx: stored for asset_idx, stored, _src in instruction_assets}
-            recipe_instructions = build_instructions(ordered_steps, recipe_id, step_asset_map)
-
-            stage = "update recipe"
-            update_recipe(
+    failed_paths, errors[:] = process_recipe_files(
+        recipe_files,
+        session,
+        mealie_base_url,
+        images_dir,
+        max_workers=workers,
+        session_factory=lambda: build_session(mealie_token),
+    )
+    if failed_paths:
+        for attempt in range(1, 3):
+            print(f"Retrying {len(failed_paths)} errored file(s) (attempt {attempt}/2)...")
+            failed_paths, errors[:] = process_recipe_files(
+                failed_paths,
                 session,
                 mealie_base_url,
-                slug,
-                recipe,
-                entry,
-                recipe_categories,
-                recipe_instructions,
-                recipe_ingredients,
-                recipe_tags,
+                images_dir,
+                label=f"retry {attempt}",
+                max_workers=workers,
+                session_factory=lambda: build_session(mealie_token),
             )
-
-            image_selection = select_image(entry)
-            should_upload_image = created_new or not recipe.get("image")
-            if image_selection and should_upload_image:
-                image_filename, _image_url = image_selection
-                stage = "upload recipe image"
-                upload_recipe_image(session, mealie_base_url, slug, images_dir, image_filename)
-
-            if recipe_id and instruction_assets:
-                stage = "sync instruction assets"
-                for asset_idx, stored_filename, source_filename in instruction_assets:
-                    if asset_exists(session, mealie_base_url, recipe_id, stored_filename):
-                        continue
-                    upload_recipe_asset(
-                        session, mealie_base_url, slug, images_dir, stored_filename, source_filename
-                    )
-                    asset_exists(session, mealie_base_url, recipe_id, stored_filename)
-        except Exception as exc:
-            errors.append(f"{path.name}: {slug}: {stage}: {exc}")
+            if not failed_paths:
+                break
 
     if warnings:
         print("Warnings encountered:")

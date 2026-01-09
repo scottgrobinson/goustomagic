@@ -22,7 +22,7 @@
     { "name": "Portobello mushrooms", "quantity": null, "unit": null },
     { "name": "White miso paste", "quantity": 1, "unit": "tablespoon" },
     { "name": "Dried chilli flakes", "quantity": 0.5, "unit": "teaspoon" },
-    { "name": "Baby kale", "quantity": 50, "unit": "gram" },
+    { "name": "Kale", "quantity": 50, "unit": "gram" },
     { "name": "Spring onion", "quantity": 1, "unit": null },
     { "name": "Soy sauce", "quantity": 32, "unit": "millilitre" }
   ],
@@ -59,7 +59,7 @@
     { "name": "Pumpkin seeds", "quantity": 30, "unit": "gram" }
   ],
   "one-tray-sticky-glazed-chicken-beetroot-bake": [
-    { "name": "British skinless chicken thighs", "quantity": 320, "unit": "gram" },
+    { "name": "Skinless chicken thighs", "quantity": 320, "unit": "gram" },
     { "name": "Butter beans", "quantity": 390, "unit": "gram" },
     { "name": "Chicken stock mix", "quantity": 11, "unit": "gram" },
     { "name": "Cooked beetroot", "quantity": 250, "unit": "gram" },
@@ -74,7 +74,7 @@
   ],
   "festive-double-stacked-vegan-cheeseburger": [
     { "name": "Henderson's Relish", "quantity": 15, "unit": "millilitre" },
-    { "name": "Brioche style buns", "quantity": 2, "unit": null },
+    { "name": "Brioche buns", "quantity": 2, "unit": null },
     { "name": "Cheese flavour slices", "quantity": 2, "unit": null },
     { "name": "Ciabatta", "quantity": 1, "unit": null },
     { "name": "Cranberry sauce", "quantity": 40, "unit": "gram" },
@@ -170,7 +170,7 @@
   ],
   "bbq-chicken-apple-slaw-wedges": [
     { "name": "Mayonnaise", "quantity": 50, "unit": "millilitre" },
-    { "name": "2 x 125g British chicken breast fillets", "quantity": 2, "unit": null },
+    { "name": "2 x 125g Chicken breast fillets", "quantity": 2, "unit": null },
     { "name": "Tomato ketchup", "quantity": 30, "unit": "millilitre" },
     { "name": "Carrot", "quantity": 1, "unit": null },
     { "name": "Cider vinegar", "quantity": 15, "unit": "millilitre" },
@@ -187,7 +187,7 @@
     { "name": "Cheddar cheese", "quantity": 80, "unit": "gram" },
     { "name": "Lasagne sheets", "quantity": 6, "unit": null },
     { "name": "Tomato paste", "quantity": 32, "unit": "gram" },
-    { "name": "British lean beef mince (<5% fat)", "quantity": 250, "unit": "gram" },
+    { "name": "Lean beef mince (<5% fat)", "quantity": 250, "unit": "gram" },
     { "name": "Henderson's Relish", "quantity": 15, "unit": "millilitre" },
     { "name": "Mixed leaf salad", "quantity": 50, "unit": "gram" },
     { "name": "Balsamic vinegar", "quantity": 15, "unit": "millilitre" },
@@ -231,7 +231,7 @@
     { "name": "Chicken stock cube", "quantity": 1, "unit": null },
     { "name": "Wheat noodle nests", "quantity": 2, "unit": null },
     { "name": "Cornflour", "quantity": 2, "unit": "tablespoon" },
-    { "name": "Large British chicken breast fillet", "quantity": 1, "unit": null },
+    { "name": "Chicken breast fillet", "quantity": 1, "unit": null },
     { "name": "Spring onions", "quantity": 2, "unit": null },
     { "name": "Garlic cloves", "quantity": 2, "unit": null },
     { "name": "Fresh root ginger", "quantity": 15, "unit": "gram" },
@@ -261,7 +261,7 @@
     { "name": "Can of chopped tomatoes (200g)", "quantity": 1, "unit": "can" }
   ],
   "spiced-beef-kebabs-with-fruity-couscous": [
-    { "name": "British beef mince", "quantity": 250, "unit": "gram" },
+    { "name": "Beef mince", "quantity": 250, "unit": "gram" },
     { "name": "Beef stock mix", "quantity": 5.5, "unit": "gram" },
     { "name": "Carrot", "quantity": 1, "unit": null },
     { "name": "Couscous", "quantity": 120, "unit": "gram" },
@@ -278,7 +278,7 @@
     { "name": "Cornflour", "quantity": 1, "unit": "tablespoon" },
     { "name": "Fresh root ginger", "quantity": 15, "unit": "gram" },
     { "name": "Toasted sesame oil", "quantity": 20, "unit": "millilitre" },
-    { "name": "British skinless chicken thighs", "quantity": 320, "unit": "gram" },
+    { "name": "Skinless chicken thighs", "quantity": 320, "unit": "gram" },
     { "name": "Mangetout", "quantity": 160, "unit": "gram" },
     { "name": "Spring onion", "quantity": 2, "unit": null },
     { "name": "Brown rice", "quantity": 1, "unit": null },
@@ -331,10 +331,10 @@
   ],
   "chorizo-stuffed-chicken-saffron-aioli": [
     { "name": "Romano peppers", "quantity": 2, "unit": null },
-    { "name": "British chicken thighs", "quantity": 4, "unit": null },
+    { "name": "Chicken thighs", "quantity": 4, "unit": null },
     { "name": "Fresh parsley", "quantity": 20, "unit": "gram" },
     { "name": "Black rice", "quantity": 130, "unit": "gram" },
-    { "name": "British mini cooking chorizo", "quantity": 100, "unit": "gram" },
+    { "name": "Mini cooking chorizo", "quantity": 100, "unit": "gram" },
     { "name": "Garlic clove", "quantity": 1, "unit": null },
     { "name": "Mayonnaise", "quantity": 26, "unit": "millilitre" },
     { "name": "Pinch of golden saffron", "quantity": 1, "unit": "pinch" },
