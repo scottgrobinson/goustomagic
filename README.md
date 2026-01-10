@@ -1,5 +1,6 @@
 # Goustomagic
 
+100% AI written.... :)
 Scripts for pulling Gousto recipe data, importing it into a Mealie instance, and checking ingredient consistency.
 
 ## Setup

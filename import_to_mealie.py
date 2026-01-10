@@ -1459,8 +1459,8 @@ def main() -> None:
         session_factory=lambda: build_session(mealie_token),
     )
     if failed_paths:
-        for attempt in range(1, 3):
-            print(f"Retrying {len(failed_paths)} errored file(s) (attempt {attempt}/2)...")
+        for attempt in range(1, 11):
+            print(f"Retrying {len(failed_paths)} errored file(s) (attempt {attempt}/10)...")
             failed_paths, errors[:] = process_recipe_files(
                 failed_paths,
                 session,
